@@ -23,3 +23,14 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Ruff cache
+.ruff_cache/
+
+# Local artifacts (the app uses PostgreSQL; SQLite file is unused)
+*.sqlite3
+celerybeat-schedule*
+*.zip
+
+# Allow the documented example env file
+!.env.example
