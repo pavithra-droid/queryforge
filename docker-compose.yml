@@ -5,6 +5,12 @@
 #   beat    Celery beat: periodically re-queues questions stuck in PROCESSING
 #   db      PostgreSQL 16
 #   redis   Celery broker
+#
+# Optional local LLM (several GB download, so it's opt-in):
+#   LLM_PROVIDER=ollama docker compose --profile ollama up --build
+#
+#   ollama       Ollama server (official image)
+#   ollama-pull  one-off job that downloads OLLAMA_MODEL, then exits
 
 x-app: &app
   build: .
@@ -17,10 +23,11 @@ x-app: &app
     POSTGRES_PASSWORD: queryforge
     REDIS_URL: redis://redis:6379/0
     DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
-    # Offline (deterministic, no key) by default. Set LLM_PROVIDER=ollama
-    # to use an Ollama server running on the host machine.
+    # Offline (deterministic, no key) by default. LLM_PROVIDER=ollama uses
+    # the `ollama` container below. To use Ollama installed on the host
+    # instead, set OLLAMA_BASE_URL=http://host.docker.internal:11434.
     LLM_PROVIDER: ${LLM_PROVIDER:-offline}
-    OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
     OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
     OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
   extra_hosts:
@@ -76,5 +83,41 @@ services:
       timeout: 3s
       retries: 5
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    # Lets Django/Celery running outside Docker reach it at localhost:11434.
+    ports:
+      - "127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434"
+    volumes:
+      # Models persist here, so they're downloaded only once.
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # NVIDIA GPU (optional, needs nvidia-container-toolkit). Without it,
+    # Ollama runs on the CPU, which is slower but works.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres_data:
+  ollama_data:

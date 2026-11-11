@@ -285,7 +285,7 @@ Everything has a working default.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_PROVIDER` | `offline` | `offline` or `ollama` |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` (Docker: `http://host.docker.internal:11434`) | Address of the Ollama server |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` (Docker: `http://ollama:11434`) | Address of the Ollama server |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Model name |
 | `OLLAMA_TIMEOUT` | `60` (Docker: `120`) | Seconds per LLM call |
 | `QUESTION_CREATE_RATE` | `10/minute` | Throttle on `POST /questions/` |
@@ -296,21 +296,40 @@ Everything has a working default.
 
 ### Optional: answers from a real LLM with Ollama
 
-```bash
-curl -fsSL https://ollama.com/install.sh | sh     # Linux; macOS/Windows: ollama.com/download
-ollama pull llama3.2:3b                           # ~2 GB (llama3.2:1b is faster on CPU)
-```
-
-On Linux, Ollama only accepts connections from the machine itself
-(127.0.0.1), so containers can't reach it. Let it accept connections from the
-containers, then start the stack with the provider switched on:
+Ollama runs as a container, so nothing needs installing on your machine. It's
+an optional Compose *profile*, so the default `docker compose up` doesn't
+download several GB for it.
 
 ```bash
-sudo systemctl edit ollama        # add:  [Service]
-                                  #       Environment="OLLAMA_HOST=0.0.0.0"
-sudo systemctl restart ollama
-LLM_PROVIDER=ollama docker compose up --build
+LLM_PROVIDER=ollama docker compose --profile ollama up --build
 ```
+
+This adds two services:
+
+- **`ollama`**: the Ollama server (official `ollama/ollama` image). Downloaded
+  models are kept in the `ollama_data` volume, so they're fetched only once.
+- **`ollama-pull`**: a one-off job that downloads `OLLAMA_MODEL` and exits.
+
+The first run downloads the Ollama image (about 8.5 GB on disk, mostly GPU
+libraries) and the model (`llama3.2:3b` is about 2 GB). Wait for the
+log line `ollama-pull-1 exited with code 0` before asking questions. A question
+asked before the model is ready fails, because Ollama answers `404 model not
+found` and that error isn't retried.
+
+On a laptop without a GPU, a smaller model is faster:
+
+```bash
+LLM_PROVIDER=ollama OLLAMA_MODEL=llama3.2:1b docker compose --profile ollama up --build
+```
+
+Ollama runs on the CPU by default. For an NVIDIA GPU, uncomment the `deploy:`
+block in `docker-compose.yml` (this needs `nvidia-container-toolkit`).
+
+**Already have Ollama installed on the host?** Point the containers at it
+instead, and leave out the profile:
+`LLM_PROVIDER=ollama OLLAMA_BASE_URL=http://host.docker.internal:11434 docker compose up`.
+On Linux, the host's Ollama must listen on `0.0.0.0` (set `OLLAMA_HOST` in
+`systemctl edit ollama`).
 
 Docker Compose also reads a `.env` file in the project folder, so a local
 `.env` with `LLM_PROVIDER=ollama` switches the provider too.
@@ -368,7 +387,7 @@ Run these with the stack up (`B=http://localhost:8000/api/questions/`).
 | 6 | Throttle | Send 11 `POST`s within a minute | The 11th returns `429 throttled` with `Retry-After`; `GET` still works |
 | 7 | Worker down | `docker compose stop worker`, `POST`, then `docker compose start worker` | Stays `PENDING`, then completes once the worker is back (the task waited in Redis) |
 | 8 | Wikipedia unreachable | Disconnect the network, then `POST` | Worker log shows 3 retries with growing waits, then `FAILED` with a friendly `error_message` |
-| 9 | LLM unreachable | `LLM_PROVIDER=ollama` with Ollama stopped | Same as 8: retried, then `FAILED` |
+| 9 | LLM unreachable | Ollama profile running, then `docker compose stop ollama` and `POST` | Same as 8: retried, then `FAILED` |
 | 10 | Duplicate delivery | `docker compose exec web python manage.py shell -c "from questions.tasks import process_question_task as t; t.delay(1); t.delay(1)"` | One task does the work; the other returns straight away; no duplicate sources |
 | 11 | Stuck job | Set a question to `PROCESSING` with `updated_at` 15 minutes ago | Within 5 minutes beat re-queues it and it completes |
 
