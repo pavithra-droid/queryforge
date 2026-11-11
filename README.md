@@ -16,19 +16,64 @@ question, get `202 Accepted`, and poll until it has an answer.
 **You need:** Docker with Docker Compose v2. No API keys, accounts or `.env`
 file.
 
+Pick one of two ways to run it. Both expose the API on <http://localhost:8000>.
+
+### Method 1: offline answers (default, fastest)
+
 ```bash
-docker compose up --build
+docker compose up --build        # foreground, logs in the terminal
+docker compose up --build -d     # or detached (background)
 ```
 
-This starts five containers:
+Answers come from the deterministic offline provider: no model download, no
+GPU. This starts five containers:
 
 | Service  | What it does |
 |----------|--------------|
 | `web`    | Django + DRF API on <http://localhost:8000>. Runs migrations on start. |
 | `worker` | Celery worker that processes questions |
-| `beat`   | Celery beat. Re-queues questions stuck in `PROCESSING` (see below). |
+| `beat`   | Celery beat. Every 5 minutes it re-queues questions stuck in `PROCESSING` for over 10 minutes (for example after a worker crash). |
 | `db`     | PostgreSQL 16 |
 | `redis`  | Celery broker |
+
+### Method 2: answers from a local LLM (Ollama)
+
+```bash
+LLM_PROVIDER=ollama docker compose --profile ollama up --build -d
+```
+
+This adds two containers: `ollama` (the server) and `ollama-pull` (a one-off job
+that downloads `OLLAMA_MODEL`, default `llama3.2:3b`, about 2 GB, plus about
+8.5 GB for the image). Models are kept in the `ollama_data` volume, so they
+download only once. **Wait until the pull finishes** before calling the API or running any tests:
+
+```bash
+docker compose --profile ollama logs -f ollama-pull    # ends with "success"
+docker compose --profile ollama ps -a                   # ollama-pull: Exited (0)
+```
+
+On a laptop without a GPU, a smaller model is faster:
+`LLM_PROVIDER=ollama OLLAMA_MODEL=llama3.2:1b docker compose --profile ollama up --build -d`.
+
+### Check it is running, and see logs
+
+```bash
+docker compose ps                    # all services should be "running"/"healthy"
+docker compose logs -f worker        # watch questions being processed
+```
+
+### Stop it after testing
+
+```bash
+docker compose down                      # Method 1: stop and remove containers
+docker compose --profile ollama down     # Method 2: also stops ollama
+```
+
+Plain `docker compose down` does **not** stop the `ollama` containers, because
+they belong to a profile. Always include `--profile ollama` if you started
+Method 2. Your data is kept for next time. To also delete the database and the
+downloaded models (frees about 10 GB), add `-v`:
+`docker compose --profile ollama down -v`.
 
 **Ask a question:**
 
@@ -48,7 +93,7 @@ curl -s http://localhost:8000/api/questions/1/
 The answer is usually ready within 1–2 seconds.
 
 > **Port already in use?** If Postgres or Redis already runs on your machine,
-> run `POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 WEB_PORT=8001 docker compose up --build`.
+> run `POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 WEB_PORT=8001 docker compose up --build -d`.
 > Those host ports are published only for local development; the containers
 > talk to each other over the Compose network.
 
@@ -184,12 +229,6 @@ uses a local LLM told to answer only from the supplied context.
 - Polling instead of WebSockets: simplest to run and test.
 - `runserver` in Docker: one command, but not a production server.
 
-**Optional LLM.** `LLM_PROVIDER=ollama docker compose --profile ollama up --build`
-runs Ollama in a container and pulls `OLLAMA_MODEL` (default `llama3.2:3b`,
-about 2 GB, plus about 8.5 GB for the image). Wait for
-`ollama-pull-1 exited with code 0` before asking questions. All settings have
-defaults; see `.env.example`.
-
 ---
 
 ## Testing and QA
@@ -247,7 +286,7 @@ Run these with the stack up (`B=http://localhost:8000/api/questions/`).
 
 ## How I used AI
 
-I used Claude Code as a pair programmer for review, debugging and drafting, and
+I used AI tools as a pair programmer for review, debugging and drafting, and
 checked every change against live Wikipedia and PostgreSQL, not only the unit
 tests.
 
