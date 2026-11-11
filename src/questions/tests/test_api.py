@@ -141,7 +141,7 @@ def test_question_at_limit_is_accepted(mock_apply_async, api_client):
 
 
 @pytest.mark.django_db
-def test_list_is_paginated_newest_first(api_client):
+def test_list_is_paginated_oldest_first(api_client):
     questions = Question.objects.bulk_create(
         Question(text=f"Question {i}") for i in range(25)
     )
@@ -150,13 +150,13 @@ def test_list_is_paginated_newest_first(api_client):
 
     assert first["count"] == 25
     assert len(first["results"]) == 20
-    assert first["results"][0]["id"] == questions[-1].id
+    assert [q["id"] for q in first["results"]] == [q.id for q in questions[:20]]
     assert first["previous"] is None
     assert first["next"] is not None
 
     second = api_client.get(first["next"]).json()
 
-    assert len(second["results"]) == 5
+    assert [q["id"] for q in second["results"]] == [q.id for q in questions[20:]]
     assert second["next"] is None
     # No question appears on both pages.
     first_ids = {q["id"] for q in first["results"]}

@@ -10,10 +10,11 @@ from questions.throttling import QuestionCreateThrottle
 
 
 class QuestionViewSet(viewsets.ModelViewSet):
-    # Newest first. Ordering by the primary key matches creation order and
+    # Oldest first, i.e. the order questions were asked. Ordering by the
+    # primary key matches creation order and
     # uses the existing PK index, so no extra index is needed. A stable
     # ordering is required for pagination to be deterministic.
-    queryset = Question.objects.prefetch_related("source_documents").order_by("-id")
+    queryset = Question.objects.prefetch_related("source_documents").order_by("id")
     serializer_class = QuestionSerializer
     pagination_class = QuestionPagination
 

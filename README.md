@@ -61,7 +61,7 @@ Base URL: `http://localhost:8000/api/`
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/questions/` | Create a question. Returns `202` and queues it for processing. |
-| `GET`  | `/questions/` | List questions, newest first, paginated. |
+| `GET`  | `/questions/` | List questions, oldest first (in the order asked), paginated. |
 | `GET`  | `/questions/{id}/` | Get one question with its answer and sources. |
 
 Other methods return `405`.
@@ -121,7 +121,7 @@ ID=$(curl -s -X POST $B -H 'Content-Type: application/json' \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 watch -n1 "curl -s $B$ID/ | python3 -m json.tool"
 
-# List, newest first, 5 per page
+# List, oldest first, 5 per page
 curl -s "$B?page_size=5" | python3 -m json.tool
 
 # Errors
@@ -272,7 +272,7 @@ between them.
 | `simple` config for titles, `english` for body | The English stemmer turns "redis" into "redi", which made the unrelated article **Redi** rank first. Titles are names, so they shouldn't be stemmed. | The title has to contain the exact word. |
 | `normalization=0` for ranking | Dividing by document length made short stub articles beat the main one (Django CMS above Django). | Long articles that repeat a word a lot can rank a bit higher. |
 | Polling instead of WebSockets | Simplest to run and test. The brief says polling is fine. | Clients make extra requests while they wait. |
-| Page-number pagination ordered by `-id` | Familiar for clients. Ordering by the primary key uses its index, so no migration was needed. | `COUNT(*)` gets slower as the table grows. Cursor pagination would avoid it. |
+| Page-number pagination ordered by `id` (oldest first) | Familiar for clients, and questions read in the order they were asked. Ordering by the primary key uses its index, so no migration was needed. | The newest questions are on the last page. `COUNT(*)` gets slower as the table grows; cursor pagination would avoid it. |
 | A small stop-word list instead of spaCy | spaCy was loaded but not used. It added a large dependency and a model download, and slowed start-up. | English only. The list is written by hand. |
 | `runserver` in Docker | One command, auto-reload, nothing else to set up. | It's not a production server (see below). |
 
@@ -362,10 +362,10 @@ queries no matter how big the page is (`test_list_does_not_query_per_question`).
 Both main queries use indexes:
 
 ```
--- page: ORDER BY id DESC LIMIT 20
-Limit  (actual time=0.025..0.033 rows=20)
-  ->  Index Scan Backward using questions_question_pkey on questions_question
-Execution Time: 0.065 ms
+-- page: ORDER BY id ASC LIMIT 20
+Limit  (actual time=0.035..0.042 rows=20)
+  ->  Index Scan using questions_question_pkey on questions_question
+Execution Time: 0.073 ms
 
 -- prefetch of source documents for that page
 Index Scan using questions_sourcedocument_question_id_c8cea067 on questions_sourcedocument
@@ -383,7 +383,7 @@ Run these with the stack up (`B=http://localhost:8000/api/questions/`).
 | 2 | Nothing to search | `POST` *"what is it"* | `COMPLETED`, "I couldn't find relevant information…", no sources, no Wikipedia call |
 | 3 | Validation | Blank text, 501 characters, `{}`, broken JSON | `400` with `validation_error` or `parse_error` |
 | 4 | Not found / method | `GET ${B}999999/`, `DELETE ${B}1/` | `404 not_found`, `405 method_not_allowed` |
-| 5 | Pagination | Create more than 5 questions, then `GET $B?page_size=5` and follow `next` | Newest first, no repeats across pages, `?page=999` gives `404` |
+| 5 | Pagination | Create more than 5 questions, then `GET $B?page_size=5` and follow `next` | Oldest first (1, 2, 3…), no repeats across pages, `?page=999` gives `404` |
 | 6 | Throttle | Send 11 `POST`s within a minute | The 11th returns `429 throttled` with `Retry-After`; `GET` still works |
 | 7 | Worker down | `docker compose stop worker`, `POST`, then `docker compose start worker` | Stays `PENDING`, then completes once the worker is back (the task waited in Redis) |
 | 8 | Wikipedia unreachable | Disconnect the network, then `POST` | Worker log shows 3 retries with growing waits, then `FAILED` with a friendly `error_message` |
